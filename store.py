@@ -17,14 +17,18 @@ def key(value):
 
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", dir=path.parent, encoding="utf-8", delete=False) as f:
-        try:
+    name = None
+    try:
+        with tempfile.NamedTemporaryFile("w", dir=path.parent, encoding="utf-8", delete=False) as f:
+            name = f.name
             json.dump(value, f, ensure_ascii=False, indent=2, allow_nan=False)
             f.flush()
             os.fsync(f.fileno())
-            os.replace(f.name, path)
-        finally:
-            Path(f.name).unlink(missing_ok=True)
+        # Windows 不允许替换仍被打开的临时文件。
+        os.replace(name, path)
+    finally:
+        if name is not None:
+            Path(name).unlink(missing_ok=True)
 
 
 class Store:

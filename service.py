@@ -3,6 +3,7 @@ import time
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from browser import Browser, is_target_closed_error
 from guard import QueryError
@@ -120,18 +121,22 @@ class Task:
 
 
 class Service:
-    def __init__(self, dev=False):
+    def __init__(self, dev=False, directory=None, profile=None):
         self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="boss")
-        self.browser = Browser(dev=dev)
-        directory = DATA / "dev" if dev else DATA
-        samples = directory / "examples" if dev else ROOT / "examples"
+        self.browser = Browser(dev=dev, profile=profile)
+        custom_directory = directory is not None
+        directory = Path(directory) if custom_directory else DATA / "dev" if dev else DATA
+        samples = directory / "examples" if dev or custom_directory else ROOT / "examples"
         self.boss = BossQuery(self.browser, Store(directory, samples=samples))
         self.tasks = {}
         self.lock = threading.Lock()
+        self.closed = False
 
     def submit(self, data):
         params = validate(data)
         with self.lock:
+            if self.closed:
+                raise Busy("应用正在退出，请稍后重新打开。")
             latest = next(reversed(self.tasks.values()), None)
             if latest and latest.snapshot()["status"] not in ("done", "partial", "error"):
                 raise Busy("已有查询正在进行，请先完成或取消当前查询。")
@@ -165,7 +170,11 @@ class Service:
                 task.finish("error", f"查询失败（{type(exc).__name__}）。请查看 Chrome 窗口并检查项目环境。")
 
     def close(self):
-        task = self.get()
+        with self.lock:
+            if self.closed:
+                return
+            self.closed = True
+            task = next(reversed(self.tasks.values()), None)
         if task:
             task.cancel()
         try:

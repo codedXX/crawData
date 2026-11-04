@@ -32,13 +32,17 @@ section{margin-top:30px}.topline{display:flex;align-items:baseline;justify-conte
 <div id="activity"><span id="status" role="status">等待查询</span><div id="prompt"></div><button type="button" id="cancel" class="secondary" hidden>停止查询</button></div>
 <section id="summary" hidden><h2>薪资概况</h2><dl class="metrics" id="metrics"></dl><div class="range" id="range" aria-hidden="true"><i class="marker" id="marker"></i></div><small id="basis"></small></section>
 <section id="companies" hidden><details><summary>按公司汇总</summary><small>仅统计本次已采集到的匹配岗位。</small><div class="scroll"><table><thead><tr><th>公司</th><th>匹配岗位</th><th>月薪样本</th><th>中位月薪（元）</th></tr></thead><tbody id="company-rows"></tbody></table></div></details></section>
-<section><div class="topline"><h2>匹配岗位</h2><a id="csv" class="download" hidden>导出 CSV</a></div><p id="context"></p><p id="result-note" hidden></p><p id="empty">输入岗位关键词和城市即可跨公司搜索，也可填写公司查询其岗位。首次使用时，请在打开的 Chrome 窗口里扫码登录。</p><div class="scroll"><table id="table" hidden><thead><tr><th>岗位 / 公司</th><th>薪资原文</th><th>月薪范围（元）</th><th>年薪月数</th><th>城市 / 区域</th><th>经验</th><th>学历</th><th>技能</th></tr></thead><tbody id="job-rows"></tbody></table></div></section>
+<section><div class="topline"><h2>匹配岗位</h2><a id="csv" class="download" hidden>导出 CSV</a></div><p id="export-status" role="status" hidden></p><p id="context"></p><p id="result-note" hidden></p><p id="empty">输入岗位关键词和城市即可跨公司搜索，也可填写公司查询其岗位。首次使用时，请在打开的 Chrome 窗口里扫码登录。</p><div class="scroll"><table id="table" hidden><thead><tr><th>岗位 / 公司</th><th>薪资原文</th><th>月薪范围（元）</th><th>年薪月数</th><th>城市 / 区域</th><th>经验</th><th>学历</th><th>技能</th></tr></thead><tbody id="job-rows"></tbody></table></div></section>
 </main>
 <script>
 const el = id => document.getElementById(id);
 const form = el('search');
 const money = n => n == null ? '—' : n.toLocaleString('zh-CN', {maximumFractionDigits: 2});
 let current, rendered, promptId, timer;
+const desktopReady = window.BOSS_DESKTOP ? new Promise(resolve => {
+  if (window.pywebview?.api) resolve();
+  else window.addEventListener('pywebviewready', resolve, {once:true});
+}) : null;
 function updateMode() {
   const search = !form.elements.company.value.trim();
   el('company-pages').hidden = search;
@@ -62,6 +66,12 @@ function node(tag, text) {
   return element;
 }
 async function api(path, data) {
+  if (window.BOSS_DESKTOP) {
+    await desktopReady;
+    const result = await window.pywebview.api.request(path, data ?? null);
+    if (result.error) throw Error(result.error);
+    return result.data;
+  }
   const options = data ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)} : {};
   const response = await fetch(path, options);
   const body = await response.json();
@@ -107,7 +117,20 @@ function showResult(state) {
   el('table').hidden = !jobs.length;
   el('empty').hidden = !!jobs.length;
   el('empty').textContent = '已读取的结果没有匹配岗位。可以更换关键词、城市或扩大读取范围。';
-  el('csv').href = '/jobs/' + state.id + '/csv';
+  el('csv').href = window.BOSS_DESKTOP ? '#' : '/jobs/' + state.id + '/csv';
+  el('export-status').hidden = true;
+  el('csv').onclick = window.BOSS_DESKTOP ? async event => {
+    event.preventDefault();
+    try {
+      const result = await window.pywebview.api.save_csv(state.id);
+      if (result.error) throw Error(result.error);
+      if (result.cancelled) return;
+      el('export-status').textContent = 'CSV 已保存至 ' + result.path;
+    } catch (error) {
+      el('export-status').textContent = error.message;
+    }
+    el('export-status').hidden = false;
+  } : null;
   el('csv').hidden = false;
 }
 async function action(kind, data) {

@@ -2,5 +2,8 @@
 __pycache__/
 data/
 profiles/
+.build-env/
+build/
+dist/
 examples/boss_joblist.json
 examples/boss_company_first_page.json

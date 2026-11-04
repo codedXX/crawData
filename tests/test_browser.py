@@ -123,6 +123,14 @@ class BrowserTests(unittest.TestCase):
         self.playwright.return_value.start.assert_called_once()
         driver.stop.assert_called_once()
 
+    def test_missing_chrome_has_actionable_message(self):
+        context, driver = session(page())
+        driver.chromium.launch_persistent_context.side_effect = Error("Chromium distribution 'chrome' is not found")
+        self.launch(driver)
+        with self.assertRaisesRegex(QueryError, "请安装 Chrome"):
+            self.client.page()
+        driver.stop.assert_called_once()
+
     def test_closing_during_query_stops_without_replaying_query(self):
         with tempfile.TemporaryDirectory() as tmp, patch("service.DATA", Path(tmp)):
             service = Service(dev=True)

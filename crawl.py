@@ -1,7 +1,6 @@
 """按公司或跨公司搜索 BOSS 在招岗位，或离线读取 JobPosting。"""
 import argparse
-from contextlib import contextmanager
-import fcntl
+from contextlib import contextmanager, ExitStack
 import json
 import sys
 import threading
@@ -12,6 +11,7 @@ from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 from guard import QueryError
+from app_lock import AlreadyRunning, instance_lock
 from service import Busy, Service
 from store import DATA, ROOT, csv_bytes
 
@@ -93,14 +93,16 @@ def backend(port, attach, dev=False):
     """持有进程锁的服务独占 profile 和数据；其他 CLI 通过回环 HTTP 复用它。"""
     directory = DATA / "dev" if dev else DATA
     directory.mkdir(parents=True, exist_ok=True)
-    with (directory / "service.lock").open("a+") as lock:
+    with ExitStack() as stack:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+            stack.enter_context(instance_lock(directory / "service.guard"))
+        except AlreadyRunning:
             # 创建者先拿锁后发布端口，短暂等待发布完成。
             for _ in range(30):
-                lock.seek(0)
-                active = lock.read().strip()
+                try:
+                    active = (directory / "service.lock").read_text(encoding="ascii").strip()
+                except FileNotFoundError:
+                    active = ""
                 if active.isdigit():
                     break
                 time.sleep(.1)
@@ -111,8 +113,7 @@ def backend(port, attach, dev=False):
                 raise QueryError(f"本项目的服务已启动，请打开 {url}/")
             yield url
             return
-        lock.seek(0)
-        lock.truncate()
+        lock = stack.enter_context((directory / "service.lock").open("w", encoding="ascii"))
         try:
             with ThreadingHTTPServer(("127.0.0.1", port), Handler) as server:
                 server.service = Service(dev=dev)

@@ -10,7 +10,7 @@ from salary import summarize
 from sites.boss import BossSession, HOME, JOBLIST, SchemaError, map_job, matches, unpack
 
 # 官方公开城市字典的名称/代码快照，来源和更新时间见 README。
-CITIES = json.loads(Path(__file__).with_name("boss_cities.json").read_text())
+CITIES = json.loads(Path(__file__).with_name("boss_cities.json").read_text(encoding="utf-8"))
 SEARCH_CARDS = '.job-list-container .rec-job-list a[href*="/job_detail/"]:visible'
 
 

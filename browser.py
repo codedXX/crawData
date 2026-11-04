@@ -12,8 +12,8 @@ def is_target_closed_error(error):
 
 
 class Browser:
-    def __init__(self, platform="boss", dev=False):
-        self.profile = ROOT / "profiles" / ("dev" if dev else "") / platform
+    def __init__(self, platform="boss", dev=False, profile=None):
+        self.profile = Path(profile) if profile is not None else ROOT / "profiles" / ("dev" if dev else "") / platform
         self.driver = None
         self.context = None
         self.tab = None
@@ -54,8 +54,11 @@ class Browser:
             )
             self._context_closed = False
             self.context.on("close", self._on_context_closed)
-        except Exception:
+        except Exception as exc:
             self.close()
+            message = str(exc).lower()
+            if "chrome" in message and ("not found" in message or "doesn't exist" in message):
+                raise QueryError("未找到 Google Chrome。请安装 Chrome 后重新查询。") from exc
             raise
 
     def _on_context_closed(self, context):

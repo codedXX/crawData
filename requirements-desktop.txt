@@ -1,0 +1,4 @@
+# 与桌面打包测试使用的版本保持一致。
+patchright==1.64.4
+esprima==4.0.1
+pywebview==6.2.1
