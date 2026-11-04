@@ -28,7 +28,15 @@ def main():
     result = json.loads(report.read_text(encoding="utf-8"))
     if not result.get("ok") or result.get("chrome") != "desktop-offline-check":
         raise SystemExit(f"桌面验收失败，请检查 {report}")
-    shutil.copy2(root / "WINDOWS.md", root / "dist" / "BossJobs" / "使用说明.md")
+    # 使用说明和卸载入口和 exe 放在同一层，用户解压后即可双击卸载。
+    uninstall = root / "scripts" / "uninstall.ps1"
+    if not uninstall.read_bytes().startswith(b"\xef\xbb\xbf"):
+        raise SystemExit("scripts/uninstall.ps1 必须保存为带 BOM 的 UTF-8，"
+                         "否则 Windows PowerShell 按 ANSI 解码会让中文提示乱码。")
+    package = root / "dist" / "BossJobs"
+    shutil.copy2(root / "WINDOWS.md", package / "使用说明.md")
+    shutil.copy2(root / "scripts" / "uninstall.cmd", package / "卸载.cmd")
+    shutil.copy2(uninstall, package / "卸载.ps1")
     archive = shutil.make_archive(str(root / "dist" / "BossJobs-windows-x64"), "zip",
                                   root / "dist", "BossJobs")
     print(f"已生成并通过离线验收：{archive}")

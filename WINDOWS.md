@@ -14,6 +14,16 @@
 
 同一数据目录只允许一个应用实例。重复双击会提示切换到已打开的窗口。
 
+## 卸载
+
+双击应用目录中的「卸载.cmd」。脚本会先关闭运行中的 `BossJobs.exe`，再删除程序目录，并询问是否同时删除用户数据。
+
+- 默认**保留** `%LOCALAPPDATA%\BossJobs\`：其中是专用 Chrome 的 BOSS 登录状态、公司映射和请求计数，删除后需要重新扫码。
+- 选择删除时会先结束命令行里带 `%LOCALAPPDATA%\BossJobs\profiles` 的 Chrome 进程，不影响日常使用的 Chrome。
+- 程序目录由一个延迟启动的隐藏进程删除，因为脚本无法删除自己所在的目录；窗口关闭后目录可能还会存在一两秒。
+
+找不到 `BossJobs.exe` 时脚本直接退出并提示，避免被放到其他位置时误删。也可以手动删除程序目录和 `%LOCALAPPDATA%\BossJobs\`，效果相同。
+
 ## 数据目录
 
 普通模式使用 `%LOCALAPPDATA%\BossJobs\`，通常为 `C:\Users\你的用户名\AppData\Local\BossJobs\`：

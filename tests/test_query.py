@@ -172,3 +172,22 @@ class StorageTests(unittest.TestCase):
         self.guard.finish_company(success=True)
         self.assertEqual(self.guard.state()["companies"], 1)
 
+    def test_wait_reports_planned_pause_once(self):
+        # 用时由界面按 started_at 自己算，所以等待期间只上报一条消息，命令行不会被刷屏。
+        reported = []
+        self.guard.report = reported.append
+        self.guard.sleep = Mock()
+        self.guard.wait(7.4)
+        self.guard.sleep.assert_called_once_with(7.4)
+        # 向上取整：显示 8 秒而实际 7.4 秒，不会少于真实剩余时间。
+        self.assertEqual(reported, ["等待 8 秒"])
+
+    def test_zero_wait_reports_nothing(self):
+        now = Mock()
+        self.guard.report = now
+        self.guard.sleep = Mock()
+        self.guard.wait(0)
+        self.guard.wait(-3)
+        now.assert_not_called()
+        self.guard.sleep.assert_not_called()
+

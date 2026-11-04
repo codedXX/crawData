@@ -124,6 +124,16 @@ class DesktopTests(unittest.TestCase):
         with instance_lock(self.root / "desktop.lock"):
             pass
 
+    def test_query_timer_starts_at_submit_and_freezes_at_finish(self):
+        # 界面按这两个时刻显示整次查询的用时，结束后不再继续增长。
+        task = Task({})
+        started = task.snapshot()
+        self.assertIsInstance(started["started_at"], float)
+        self.assertIsNone(started["finished_at"])
+        task.finish("done", "查询完成")
+        finished = task.snapshot()
+        self.assertGreaterEqual(finished["finished_at"], finished["started_at"])
+
     def test_desktop_resources_load_independent_of_working_directory(self):
         previous = Path.cwd()
         try:

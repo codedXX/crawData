@@ -50,7 +50,9 @@ class Task:
         self.condition = threading.Condition()
         self.cancelled = threading.Event()
         self.answer = None
-        self.state = dict(id=self.id, query=params, status="running", message="准备查询")
+        # started_at 供界面显示整次查询的用时；finish() 时补 finished_at 把计时定住。
+        self.state = dict(id=self.id, query=params, status="running", message="准备查询",
+                          started_at=time.time(), finished_at=None)
 
     def snapshot(self):
         with self.condition:
@@ -117,7 +119,8 @@ class Task:
 
     def finish(self, status, message, **extra):
         with self.condition:
-            self.state.update(status=status, message=message, prompt=None, choices=[], **extra)
+            self.state.update(status=status, message=message, prompt=None, choices=[],
+                              finished_at=time.time(), **extra)
 
 
 class Service:

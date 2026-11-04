@@ -169,6 +169,8 @@ class SearchSession(BossSession):
                     if not batch:
                         raise SchemaError("搜索返回空批次但未声明结束，未确认读完")
                     self.pause_page()
+                    # 倒计时结束后立刻说明正在做什么，否则等到下一批响应前一直停在旧数字上。
+                    self.task.report(f"滚动加载搜索第 {self.batches + 1} 批")
                     deadline = time.monotonic() + 20
                     next_scroll = 0
                 if self.access_error:

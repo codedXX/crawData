@@ -11,7 +11,7 @@ form{padding:20px;background:var(--wash);display:grid;grid-template-columns:minm
 label{display:grid;gap:5px;font-size:14px;color:var(--quiet)}input,select,button{font:inherit}input,select{width:100%;min-width:0;padding:9px 10px;border:1px solid var(--line);border-radius:4px;background:white;color:var(--ink)}button,.download{cursor:pointer;text-decoration:none;border:1px solid var(--teal);border-radius:4px;color:white;background:var(--teal);font-weight:600;padding:9px 16px}button:disabled{opacity:.55;cursor:wait}:focus-visible{outline:3px solid var(--teal);outline-offset:3px}.secondary,.download{background:white;color:var(--teal)}[hidden]{display:none!important}#activity{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:58px;border-bottom:1px solid var(--line);color:var(--quiet)}#activity button{font-size:14px;padding:5px 10px}#prompt{display:flex;gap:8px;align-items:center;flex-wrap:wrap}#prompt select{width:auto;max-width:100%}
 .reselect{grid-column:1/-1;display:flex;align-items:center;gap:8px}.reselect input{width:auto}
 #mode-hint{grid-column:1/-1;margin:0}#result-note{padding:12px 16px;background:var(--wash);border-left:3px solid var(--teal)}
-#status.is-finished{color:#c62828;font-weight:700}
+#status.is-finished{color:#c62828;font-weight:700;font-size:20px;line-height:1.35}
 summary{cursor:pointer;color:var(--teal);font-weight:650;font-size:19px}details[open] summary{margin-bottom:12px}
 section{margin-top:30px}.topline{display:flex;align-items:baseline;justify-content:space-between;gap:12px}.download{font-size:14px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);margin:16px 0 8px;gap:15px}dt,small,#context{color:var(--quiet);font-size:14px}dd{margin:3px 0;font:600 clamp(18px,3vw,30px)/1.4 ui-monospace,"SF Mono",monospace}.range{position:relative;height:8px;background:var(--wash);border-inline:2px solid var(--line);margin:16px 0}.marker{position:absolute;top:-4px;height:16px;width:3px;background:var(--teal)}#context{margin:8px 0 16px}.scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;border-bottom:1px solid var(--line);padding:12px 10px;vertical-align:top}th{background:var(--wash);white-space:nowrap}td{min-width:76px}td:first-child{min-width:200px}td small{display:block}td a{color:var(--teal);font-weight:650}td:nth-child(3){font-variant-numeric:tabular-nums;white-space:nowrap}#empty{padding:25px 0;border-block:1px solid var(--line);color:var(--quiet)}@media(max-width:750px){main{padding:28px 16px}form{grid-template-columns:1fr 1fr}label:first-child{grid-column:1/-1}.metrics{grid-template-columns:1fr 1fr}}
 </style>
@@ -139,12 +139,42 @@ async function action(kind, data) {
     await refresh();
   } catch (error) { el('status').textContent = error.message; }
 }
+const FINISHED = ['done','partial','error'];
+// idle 也属于「没有查询在跑」，漏掉它会让首屏的查询按钮变灰、停止按钮冒出来。
+const SETTLED = ['idle','done','partial','error'];
+function statusText(state) {
+  // 整次查询一个计时：从提交时刻算起，结束时用 finished_at 定住，之后不再增长。
+  const parts = [state.message];
+  if (state.started_at) {
+    const end = state.finished_at || Date.now() / 1000;
+    const elapsed = Math.max(0, Math.floor(end - state.started_at));
+    const clock = elapsed >= 60
+      ? Math.floor(elapsed / 60) + ' 分 ' + (elapsed % 60) + ' 秒'
+      : elapsed + ' 秒';
+    parts.push((FINISHED.includes(state.status) ? '用时 ' : '已用时 ') + clock);
+  }
+  return parts.filter(Boolean).join(' · ');
+}
+let ticker = null;
+function stopTicker() {
+  if (ticker) clearInterval(ticker);
+  ticker = null;
+}
+function tickStatus() {
+  // 自己按固定节奏重画用时，不依赖轮询间隔，数字才会一直走。
+  if (current) el('status').textContent = statusText(current);
+}
 function display(state) {
   current = state;
-  const busy = !['idle','done','partial','error'].includes(state.status);
+  const busy = !SETTLED.includes(state.status);
   el('submit').disabled = busy;
   el('cancel').hidden = !busy;
-  el('status').textContent = state.message;
+  el('status').textContent = statusText(state);
+  if (state.started_at && !state.finished_at) {
+    if (!ticker) ticker = setInterval(tickStatus, 500);
+  } else {
+    stopTicker();
+  }
   el('status').classList.toggle('is-finished',['done','partial','error'].includes(state.status));
   if (state.prompt !== promptId) {
     promptId = state.prompt;

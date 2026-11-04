@@ -1,5 +1,6 @@
 """本地请求计数、查询间隔和需要人工处理的浏览器状态。"""
 import json
+import math
 import random
 import time
 from datetime import date, datetime
@@ -92,9 +93,13 @@ class Guard:
         return duration * (2 if self.state()["risks"] else 1)
 
     def wait(self, seconds):
-        if seconds > 0:
-            self.report(f"等待 {seconds:.0f} 秒")
-            self.sleep(seconds)
+        total = float(seconds)
+        if total <= 0:
+            return
+        # 只报一次计划时长，用时由界面按查询开始时刻自己算，避免每批都刷屏。
+        # 向上取整，显示值不会少于实际要等的时间。
+        self.report(f"等待 {math.ceil(total)} 秒")
+        self.sleep(total)
 
     def start_company(self):
         state = self.check()
