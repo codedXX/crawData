@@ -1,0 +1,6 @@
+.conda-env/
+__pycache__/
+data/
+profiles/
+examples/boss_joblist.json
+examples/boss_company_first_page.json

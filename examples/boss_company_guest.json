@@ -1,0 +1,118 @@
+{
+  "code": 0,
+  "zpData": {
+    "jobList": [
+      {
+        "jobName": "大健康顾问/高提成/年底双薪",
+        "salaryDesc": null,
+        "brandName": "爱来",
+        "encryptBrandId": "999c9a1207b1a9b71HF909m1FFY~",
+        "encryptJobId": "3ddfdb8031df273603F92t-9FVZT",
+        "cityName": "广州",
+        "areaDistrict": "天河区",
+        "jobExperience": "1年以内",
+        "jobDegree": "大专",
+        "skills": [
+          "销售经验",
+          "进出口贸易",
+          "个人（To C）",
+          "医疗/大健康",
+          "售前服务",
+          "O2O",
+          "跨境电商",
+          "快消品",
+          "保养保健品",
+          "客服经验",
+          "其他产品/服务",
+          "售后服务",
+          "谈判/方案制定",
+          "电网销模式",
+          "大健康企业",
+          "电话销售经验",
+          "批发/零售",
+          "互联网/科技"
+        ]
+      },
+      {
+        "jobName": "大健康高级销售（五险一金+晋升快+氛围好）",
+        "salaryDesc": null,
+        "brandName": "爱来",
+        "encryptBrandId": "999c9a1207b1a9b71HF909m1FFY~",
+        "encryptJobId": "9af5722ee8199ad10nd929i0FVtS",
+        "cityName": "广州",
+        "areaDistrict": "天河区",
+        "jobExperience": "1-3年",
+        "jobDegree": "大专",
+        "skills": [
+          "电话销售",
+          "toc",
+          "有销售经验",
+          "保健品",
+          "全日制大专学历"
+        ]
+      },
+      {
+        "jobName": "健康顾问（提供资源/不外出/大小周/社保）",
+        "salaryDesc": null,
+        "brandName": "爱来",
+        "encryptBrandId": "999c9a1207b1a9b71HF909m1FFY~",
+        "encryptJobId": "4f180c43d43f131b0nd929i0FVNX",
+        "cityName": "广州",
+        "areaDistrict": "天河区",
+        "jobExperience": "1年以内",
+        "jobDegree": "大专",
+        "skills": [
+          "销售岗",
+          "toc",
+          "保健品",
+          "电销",
+          "大专学历"
+        ]
+      },
+      {
+        "jobName": "营养咨询师（销售性质+大小周）",
+        "salaryDesc": null,
+        "brandName": "爱来",
+        "encryptBrandId": "999c9a1207b1a9b71HF909m1FFY~",
+        "encryptJobId": "906e0a3cb8348edd0nZ_3N-9EFdV",
+        "cityName": "广州",
+        "areaDistrict": "天河区",
+        "jobExperience": "经验不限",
+        "jobDegree": "大专",
+        "skills": [
+          "电话销售",
+          "快消品",
+          "医疗/大健康",
+          "网络销售",
+          "电话销售经验",
+          "保健品",
+          "个人（To+C）"
+        ]
+      },
+      {
+        "jobName": "电商销售/可无经验/储干培养/社保五险一金",
+        "salaryDesc": null,
+        "brandName": "爱来",
+        "encryptBrandId": "999c9a1207b1a9b71HF909m1FFY~",
+        "encryptJobId": "13732ce9000abd4a0nd_392_F1JW",
+        "cityName": "广州",
+        "areaDistrict": "天河区",
+        "jobExperience": "经验不限",
+        "jobDegree": "大专",
+        "skills": [
+          "零售/快消",
+          "私域",
+          "医疗/大健康",
+          "微信营销",
+          "电话销售经验",
+          "跨境",
+          "大健康顾问",
+          "网络营销经验",
+          "客户关系维护",
+          "电子商务"
+        ]
+      }
+    ],
+    "hasMore": false
+  }
+}

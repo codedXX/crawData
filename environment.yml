@@ -1,0 +1,8 @@
+name: crawl-data
+channels: [defaults]
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - patchright>=1.50,<2
+      - esprima==4.0.1
