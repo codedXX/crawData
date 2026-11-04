@@ -199,14 +199,17 @@ class BossSession:
         """只点开登录入口，扫码由用户完成；找不到入口时保持当前页面。"""
         link = login_link(self.page).first
         try:
+            self.page.bring_to_front()
             if link.count():
                 self.task.sleep(random.uniform(0.8, 2.0))
                 link.click(timeout=5000)
+                return True
         except QueryError:
             raise
         except Exception:
             # 页面结构变化时退回手动点击。
             pass
+        return False
 
     def collect(self, label, action, source=None):
         from patchright.sync_api import TimeoutError as BrowserTimeout
@@ -397,21 +400,36 @@ class BossQuery:
         self.store = store
 
     def run(self, params, task):
+        from browser import is_target_closed_error
+        from sites.boss_search import SearchSession
+
         company = params["company"]
+        search = not company
         ident = company_id(company)
         brand = dict(id=ident, name="") if ident else None
-        if not ident and not params.get("reselect"):
+        if company and not ident and not params.get("reselect"):
             brand = self.store.company(company)
-        Guard(self.store, task.report).check(companies=True)
-        session = BossSession(self.browser.page(), self.store, task)
+        Guard(self.store, task.report).check()
+        session_type = SearchSession if search else BossSession
+        session = session_type(self.browser.page(), self.store, task)
         page, guard = session.page, session.guard
         started = False
         success = False
+
+        def interrupted(message):
+            if search and session.batches:
+                return session.result(False, "interrupted", "查询未读完：" + message)
+            raise QueryError(message)
+
         page.on("request", session.meter)
         try:
             session.login()
             guard.start_company()
             started = True
+            if search:
+                result = session.read_search(params)
+                success = result["complete"]
+                return result
             if not brand:
                 brand = session.resolve(company)
                 session.pause_page()
@@ -419,15 +437,36 @@ class BossQuery:
             success = True
             return result
         except RiskBlocked as exc:
-            if guard.record_risk(exc.code) >= 2:
-                raise QueryError("当天第二次触发验证，已锁定查询，请明天再试。") from exc
+            guard.record_risk(exc.code)
+            if search:
+                return interrupted("触发安全验证，已停止加载；请在 Chrome 中人工处理，下次查询会要求确认。")
             session.verify()
             raise QueryError("已确认验证，原查询已停止。如需重新查询，请再次提交。") from exc
         except LoginRequired as exc:
+            if search:
+                try:
+                    opened = session.open_login()
+                    prompt = ("已点击登录按钮，请扫码登录" if opened else "未找到可点击的登录入口，请在项目 Chrome 中手动登录")
+                    session.ask("login", f"登录已失效，{prompt}，然后点击“我已登录”。")
+                    message = ("已确认登录，请重新提交查询。" if signed_in(page) else
+                               "尚未检测到登录状态，请在项目 Chrome 中完成登录后重新查询。")
+                except QueryError as login_error:
+                    message = str(login_error)
+                return interrupted(message)
+            session.open_login()
             session.ask("login", f"{exc} 完成后点击“我已登录”。")
             if not signed_in(page):
                 raise QueryError("尚未检测到登录头像。请在 Chrome 完成登录后重新查询。") from exc
             raise QueryError("已确认登录，请重新提交查询。") from exc
+        except (QueryError, OSError, ValueError) as exc:
+            if search and session.batches:
+                return interrupted(str(exc))
+            raise
+        except Exception as exc:
+            if is_target_closed_error(exc) and search and session.batches:
+                self.browser.close()
+                return interrupted("Chrome 窗口已关闭或连接中断。")
+            raise
         finally:
             try:
                 page.remove_listener("request", session.meter)

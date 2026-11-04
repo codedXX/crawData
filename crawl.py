@@ -1,4 +1,4 @@
-"""按公司查询 BOSS 在招岗位，或离线读取 JobPosting。"""
+"""按公司或跨公司搜索 BOSS 在招岗位，或离线读取 JobPosting。"""
 import argparse
 from contextlib import contextmanager
 import fcntl
@@ -52,7 +52,7 @@ class Handler(BaseHTTPRequestHandler):
                 state = task.snapshot() if task else dict(status="idle", message="等待查询")
                 if len(parts) < 3:
                     return self.send_json(200, state)
-                if parts[2] == "csv" and state["status"] == "done":
+                if parts[2] == "csv" and state["status"] in ("done", "partial"):
                     return self.send_body(200, "text/csv; charset=utf-8",
                                           csv_bytes(state["result"]["jobs"]), "boss-jobs.csv")
         self.send_json(404, {"error": "查询不存在或结果尚未就绪。"})
@@ -145,6 +145,11 @@ def print_result(result, ident, directory=DATA):
     jobs, summary = result["jobs"], result["summary"]
     fmt = lambda n: "—" if n is None else f"{n:,.2f}".rstrip("0").rstrip(".")
     print(f"匹配 {len(jobs)} 个岗位，月薪样本 {summary['monthly_count']} 个")
+    if result.get("mode") == "search":
+        print(f"已读 {result['batches']} 批，匹配 {result['company_count']} 家公司")
+        print(result["stop_message"])
+        for company in result["companies"]:
+            print(f"{company['company']}：{company['count']} 个岗位，中位月薪 {fmt(company['median'])} 元")
     if result.get("filter_mode") == "local":
         print("未找到站内筛选框，仅在已读取的公司岗位页面中匹配关键词。")
     for label, field in (("最低月薪（元）", "min"), ("最高月薪（元）", "max"),
@@ -162,13 +167,13 @@ def print_result(result, ident, directory=DATA):
 
 
 def query(url, args):
-    params = {k: getattr(args, k) for k in ("company", "keyword", "city", "pages")}
+    params = {k: getattr(args, k) for k in ("company", "keyword", "city", "pages", "batches")}
     params["reselect"] = args.reselect
     state = request(url + "/jobs/query", params)
     path = url + "/jobs/" + state["id"]
     last = None
     try:
-        while state["status"] not in ("done", "error"):
+        while state["status"] not in ("done", "partial", "error"):
             if state["message"] != last:
                 last = state["message"]
                 print(last, flush=True)
@@ -187,7 +192,15 @@ def query(url, args):
             state = request(path)
     except (EOFError, KeyboardInterrupt):
         request(path + "/cancel", {})
-        raise QueryError("查询已取消。") from None
+        # 等工作线程发布已收集结果，避免临时服务随 CLI 退出而丢掉部分结果。
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            state = request(path)
+            if state["status"] in ("done", "partial", "error"):
+                break
+            time.sleep(.2)
+        else:
+            raise QueryError("已请求停止，工作线程仍在结束当前操作。") from None
     if state["status"] == "error":
         raise QueryError(state["message"])
     print(state["message"])
@@ -200,13 +213,14 @@ def main():
     serve = commands.add_parser("serve", help="启动本地网页")
     serve.add_argument("--port", type=int, default=None)
     serve.add_argument("--dev", action="store_true", help="使用独立的开发数据和浏览器配置")
-    search = commands.add_parser("query", help="查询公司岗位并导出 CSV")
-    search.add_argument("--company", required=True, help="公司名称或 BOSS 公司链接")
+    search = commands.add_parser("query", help="查询岗位并导出 CSV；省略公司时跨公司搜索")
+    search.add_argument("--company", default="", help="公司名称或 BOSS 公司链接；省略时跨公司搜索")
     search.add_argument("--dev", action="store_true", help="使用独立的开发数据和浏览器配置")
     search.add_argument("--reselect", action="store_true", help="重新选择公司并更新名称映射")
     search.add_argument("--keyword", default="前端")
     search.add_argument("--city", default="")
-    search.add_argument("--pages", default=5, type=int, choices=(1, 2, 3, 4, 5))
+    search.add_argument("--pages", default=5, type=int, choices=(1, 2, 3, 4, 5), help="公司查询读取页数")
+    search.add_argument("--batches", default=0, type=int, help="跨公司搜索批数，0 自动加载到结束（默认，无每日次数上限）；可选 1–60")
     scrape = commands.add_parser("collect", help="读取 HTML 中的 JobPosting 并输出 JSON")
     scrape.add_argument("source")
     scrape.add_argument("--company", default="")

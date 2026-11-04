@@ -23,16 +23,24 @@ def validate(data):
         if not isinstance(value, str) or len(value) > limit:
             raise ValueError("公司、关键词或城市格式无效。")
         params[name] = value.strip()
-    if not params["company"]:
-        raise ValueError("请填写公司名或公司主页链接。")
+    if not params["company"] and not params["keyword"]:
+        raise ValueError("跨公司搜索请填写岗位关键词。")
     company_id(params["company"])
+    if not params["company"]:
+        from sites.boss_search import city_code
+        city_code(params["city"])
     pages = data.get("pages", 5)
     if type(pages) is not int or not 1 <= pages <= 5:
         raise ValueError("每次读取 1 至 5 页。")
     reselect = data.get("reselect", False)
     if type(reselect) is not bool:
         raise ValueError("重新选择公司参数必须为布尔值。")
-    return dict(params, pages=pages, reselect=reselect)
+    if reselect and not params["company"]:
+        raise ValueError("跨公司搜索不能重新选择同名公司。")
+    batches = data.get("batches", 0)
+    if type(batches) is not int or not 0 <= batches <= 60:
+        raise ValueError("搜索批数应为 0（自动加载）或 1 至 60。")
+    return dict(params, pages=pages, batches=batches, reselect=reselect)
 
 
 class Task:
@@ -125,7 +133,7 @@ class Service:
         params = validate(data)
         with self.lock:
             latest = next(reversed(self.tasks.values()), None)
-            if latest and latest.snapshot()["status"] not in ("done", "error"):
+            if latest and latest.snapshot()["status"] not in ("done", "partial", "error"):
                 raise Busy("已有查询正在进行，请先完成或取消当前查询。")
             if len(self.tasks) >= 12:
                 del self.tasks[next(iter(self.tasks))]
@@ -141,7 +149,9 @@ class Service:
     def run(self, params, task):
         try:
             result = self.boss.run(params, task)
-            task.finish("done", "查询完成", result=result)
+            partial = result.get("complete") is False
+            task.finish("partial" if partial else "done",
+                        result.get("stop_message", "查询完成"), result=result)
         except (QueryError, OSError, ValueError) as exc:
             task.finish("error", str(exc))
         except ModuleNotFoundError as exc:

@@ -1,4 +1,4 @@
-"""本地日期额度、查询间隔和需要人工处理的浏览器状态。"""
+"""本地请求计数、查询间隔和需要人工处理的浏览器状态。"""
 import json
 import random
 import time
@@ -77,18 +77,15 @@ class Guard:
         state = self.store.read("quota.json")
         today = date.today().isoformat()
         if state.get("date") != today:
-            return dict(date=today, companies=0, requests=0, company_limit=20,
-                        request_limit=60, risks=0, last_end=0, needs_verify=False)
+            return dict(date=today, companies=0, requests=0,
+                        risks=0, last_end=0, needs_verify=False)
+        # 兼容已有额度文件：保留计数与验证状态，旧上限不再参与查询控制。
+        state.pop("company_limit", None)
+        state.pop("request_limit", None)
         return state
 
-    def check(self, companies=False):
-        state = self.state()
-        if state["risks"] >= 2:
-            raise QueryError("当天已两次触发验证，查询已锁定，请明天再试。")
-        if state["requests"] >= state["request_limit"] or (
-                companies and state["companies"] >= state["company_limit"]):
-            raise QueryError("当天额度已用完，请明天再试。")
-        return state
+    def check(self):
+        return self.state()
 
     def interval(self, low, high):
         duration = min(high, max(low, random.gauss((low + high) / 2, (high - low) / 6)))
@@ -100,13 +97,13 @@ class Guard:
             self.sleep(seconds)
 
     def start_company(self):
-        state = self.check(companies=True)
+        state = self.check()
         if state["last_end"]:
             delay = self.interval(20, 60)
             if state["companies"] and state["companies"] % 5 == 0 and state.get("rest_after") != state["companies"]:
                 delay += self.interval(180, 300)
             self.wait(delay - (time.time() - state["last_end"]))
-        state = self.check(companies=True)
+        state = self.check()
         state["rest_after"] = state["companies"]
         state["last_end"] = time.time()
         self.store.write("quota.json", state)
@@ -123,16 +120,11 @@ class Guard:
         state = self.state()
         state["requests"] += 1
         self.store.write("quota.json", state)
-        if state["requests"] > state["request_limit"]:
-            raise QueryError("页面额外加载已达到当天请求额度，查询已停止，请明天再试。")
 
     def record_risk(self, code):
         state = self.state()
         state["risks"] += 1
         state["needs_verify"] = True
-        if state["risks"] == 1:
-            for used, limit in (("requests", "request_limit"), ("companies", "company_limit")):
-                state[limit] = state[used] + max(0, state[limit] - state[used]) // 2
         self.store.write("quota.json", state)
         event = dict(time=datetime.now().astimezone().isoformat(timespec="seconds"),
                      action=self.action, code=code)

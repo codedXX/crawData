@@ -114,7 +114,8 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(validate({"company": "公司"})["pages"], 5)
         for pages in range(1, 6):
             self.assertEqual(validate({"company": "A", "pages": pages})["pages"], pages)
-        for data in ({"company": ""}, {"company": "A", "pages": 0}, {"company": "A", "pages": 6}, {"company": "A", "pages": True}):
+        self.assertEqual(validate({"company": ""})["batches"], 0)
+        for data in ({"company": "", "keyword": ""}, {"company": "A", "pages": 0}, {"company": "A", "pages": 6}, {"company": "A", "pages": True}):
             with self.assertRaises(ValueError):
                 validate(data)
 
@@ -126,29 +127,33 @@ class StorageTests(unittest.TestCase):
         self.store = Store(self.temp.name)
         self.guard = Guard(self.store, lambda msg: None, lambda t: None)
 
-    def test_daily_limits_and_lock(self):
+    def test_verification_is_recorded_without_daily_lock_or_limit(self):
         self.guard.start_company()
         self.guard.list_request()
         self.guard.finish_company(success=True)
         self.assertEqual(self.guard.record_risk(37), 1)
-        self.assertEqual((self.guard.state()["company_limit"], self.guard.state()["request_limit"]), (10, 30))
+        self.assertTrue(self.guard.state()["needs_verify"])
+        self.assertNotIn("company_limit", self.guard.state())
+        self.assertNotIn("request_limit", self.guard.state())
         self.guard.clear_verification()
         self.assertEqual(self.guard.record_risk(37), 2)
-        with self.assertRaisesRegex(QueryError, "明天"):
-            self.guard.check()
+        self.assertTrue(self.guard.check()["needs_verify"])
+        self.assertEqual(self.guard.check()["risks"], 2)
         yesterday = dict(self.guard.state(), date="2001-01-01")
         self.store.write("quota.json", yesterday)
         self.assertEqual(self.guard.check()["risks"], 0)
         self.assertEqual(len((Path(self.temp.name) / "events.log").read_text().splitlines()), 2)
 
-    def test_exhaustion_and_delay(self):
+    def test_legacy_limits_are_ignored_but_delay_is_preserved(self):
         state = self.guard.state()
-        self.store.write("quota.json", dict(state, requests=60))
-        with self.assertRaises(QueryError):
-            self.guard.list_request()
-        self.store.write("quota.json", dict(state, companies=20))
-        with self.assertRaises(QueryError):
-            self.guard.start_company()
+        self.store.write("quota.json", dict(state, requests=600, request_limit=60,
+                                             companies=200, company_limit=20))
+        self.guard.list_request()
+        self.guard.start_company()
+        self.assertEqual(self.guard.state()["requests"], 601)
+        self.assertEqual(self.guard.state()["companies"], 200)
+        self.assertNotIn("request_limit", self.store.read("quota.json"))
+        self.assertNotIn("company_limit", self.store.read("quota.json"))
         with patch("guard.time.time", return_value=time.time()):
             self.store.write("quota.json", dict(state, companies=5, last_end=time.time(), risks=1))
             self.guard.sleep = Mock()
@@ -157,7 +162,7 @@ class StorageTests(unittest.TestCase):
         self.assertGreaterEqual(seconds, 400)
         self.assertLessEqual(seconds, 720)
 
-    def test_failed_company_attempt_preserves_quota_and_cooldown(self):
+    def test_failed_company_attempt_preserves_count_and_cooldown(self):
         self.guard.start_company()
         self.guard.finish_company()
         self.assertEqual(self.guard.state()["companies"], 0)

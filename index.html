@@ -3,36 +3,59 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>公司岗位查询 · BOSS 直聘</title>
+<title>岗位查询 · BOSS 直聘</title>
 <style>
 :root{color-scheme:light;--ink:#183646;--quiet:#4a626b;--teal:#006660;--line:#c3d4d4;--wash:#edf5f3;--paper:#fbfdfd;font:16px/1.55 -apple-system,"PingFang SC",sans-serif;color:var(--ink);background:var(--paper)}
 *{box-sizing:border-box}body{margin:0}main{max-width:1140px;margin:auto;padding:48px 32px 80px}header{border-left:5px solid var(--teal);padding-left:18px}header p{margin:0;color:var(--teal);font-weight:650}h1{margin:2px 0 24px;font:650 clamp(30px,5vw,48px)/1.3 "Songti SC","STSong",serif}h2{font-size:21px;margin:0}
-form{padding:20px;background:var(--wash);display:grid;grid-template-columns:minmax(170px,2fr) minmax(110px,1fr) minmax(100px,1fr) 90px auto;gap:12px;align-items:end}
+form{padding:20px;background:var(--wash);display:grid;grid-template-columns:minmax(170px,2fr) minmax(110px,1fr) minmax(100px,1fr) 135px auto;gap:12px;align-items:end}
 label{display:grid;gap:5px;font-size:14px;color:var(--quiet)}input,select,button{font:inherit}input,select{width:100%;min-width:0;padding:9px 10px;border:1px solid var(--line);border-radius:4px;background:white;color:var(--ink)}button,.download{cursor:pointer;text-decoration:none;border:1px solid var(--teal);border-radius:4px;color:white;background:var(--teal);font-weight:600;padding:9px 16px}button:disabled{opacity:.55;cursor:wait}:focus-visible{outline:3px solid var(--teal);outline-offset:3px}.secondary,.download{background:white;color:var(--teal)}[hidden]{display:none!important}#activity{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:58px;border-bottom:1px solid var(--line);color:var(--quiet)}#activity button{font-size:14px;padding:5px 10px}#prompt{display:flex;gap:8px;align-items:center;flex-wrap:wrap}#prompt select{width:auto;max-width:100%}
 .reselect{grid-column:1/-1;display:flex;align-items:center;gap:8px}.reselect input{width:auto}
+#mode-hint{grid-column:1/-1;margin:0}#result-note{padding:12px 16px;background:var(--wash);border-left:3px solid var(--teal)}
+#status.is-finished{color:#c62828;font-weight:700}
+summary{cursor:pointer;color:var(--teal);font-weight:650;font-size:19px}details[open] summary{margin-bottom:12px}
 section{margin-top:30px}.topline{display:flex;align-items:baseline;justify-content:space-between;gap:12px}.download{font-size:14px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);margin:16px 0 8px;gap:15px}dt,small,#context{color:var(--quiet);font-size:14px}dd{margin:3px 0;font:600 clamp(18px,3vw,30px)/1.4 ui-monospace,"SF Mono",monospace}.range{position:relative;height:8px;background:var(--wash);border-inline:2px solid var(--line);margin:16px 0}.marker{position:absolute;top:-4px;height:16px;width:3px;background:var(--teal)}#context{margin:8px 0 16px}.scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;border-bottom:1px solid var(--line);padding:12px 10px;vertical-align:top}th{background:var(--wash);white-space:nowrap}td{min-width:76px}td:first-child{min-width:200px}td small{display:block}td a{color:var(--teal);font-weight:650}td:nth-child(3){font-variant-numeric:tabular-nums;white-space:nowrap}#empty{padding:25px 0;border-block:1px solid var(--line);color:var(--quiet)}@media(max-width:750px){main{padding:28px 16px}form{grid-template-columns:1fr 1fr}label:first-child{grid-column:1/-1}.metrics{grid-template-columns:1fr 1fr}}
 </style>
 </head>
 <body>
 <main>
-<header><p>BOSS 直聘</p><h1>公司岗位查询</h1></header>
+<header><p>BOSS 直聘</p><h1>岗位查询</h1></header>
 <form id="search">
-<label>公司名称或主页链接<input name="company" required maxlength="500" placeholder="例如 字节跳动"></label>
+<label>公司名称或主页链接（选填）<input name="company" maxlength="500" placeholder="留空，跨公司搜索"></label>
 <label>岗位关键词<input name="keyword" value="前端" maxlength="100" placeholder="留空查看全部"></label>
 <label>城市<input name="city" maxlength="80" placeholder="不限城市"></label>
-<label>最多读取<select name="pages"><option value="1">1 页</option><option value="2">2 页</option><option value="3">3 页</option><option value="4">4 页</option><option value="5" selected>5 页</option></select></label>
+<label id="company-pages" hidden>最多读取<select name="pages"><option value="1">1 页</option><option value="2">2 页</option><option value="3">3 页</option><option value="4">4 页</option><option value="5" selected>5 页</option></select></label>
+<label id="search-batches">搜索范围<select name="batches"><option value="0">自动加载</option><option value="1">1 批</option><option value="3">3 批</option><option value="5">5 批</option><option value="10">10 批</option></select></label>
 <button id="submit">查询岗位</button>
-<label class="reselect"><input type="checkbox" name="reselect">重新选择同名公司</label>
+<label class="reselect" id="reselect-option" hidden><input type="checkbox" name="reselect">重新选择同名公司</label>
+<small id="mode-hint"></small>
 </form>
-<div id="activity"><span id="status" role="status">等待查询</span><div id="prompt"></div><button type="button" id="cancel" class="secondary" hidden>取消查询</button></div>
+<div id="activity"><span id="status" role="status">等待查询</span><div id="prompt"></div><button type="button" id="cancel" class="secondary" hidden>停止查询</button></div>
 <section id="summary" hidden><h2>薪资概况</h2><dl class="metrics" id="metrics"></dl><div class="range" id="range" aria-hidden="true"><i class="marker" id="marker"></i></div><small id="basis"></small></section>
-<section><div class="topline"><h2>匹配岗位</h2><a id="csv" class="download" hidden>导出 CSV</a></div><p id="context"></p><p id="empty">输入公司名即可查询。首次使用时，请在打开的 Chrome 窗口里扫码登录。</p><div class="scroll"><table id="table" hidden><thead><tr><th>岗位 / 公司</th><th>薪资原文</th><th>月薪范围（元）</th><th>年薪月数</th><th>城市 / 区域</th><th>经验</th><th>学历</th><th>技能</th></tr></thead><tbody></tbody></table></div></section>
+<section id="companies" hidden><details><summary>按公司汇总</summary><small>仅统计本次已采集到的匹配岗位。</small><div class="scroll"><table><thead><tr><th>公司</th><th>匹配岗位</th><th>月薪样本</th><th>中位月薪（元）</th></tr></thead><tbody id="company-rows"></tbody></table></div></details></section>
+<section><div class="topline"><h2>匹配岗位</h2><a id="csv" class="download" hidden>导出 CSV</a></div><p id="context"></p><p id="result-note" hidden></p><p id="empty">输入岗位关键词和城市即可跨公司搜索，也可填写公司查询其岗位。首次使用时，请在打开的 Chrome 窗口里扫码登录。</p><div class="scroll"><table id="table" hidden><thead><tr><th>岗位 / 公司</th><th>薪资原文</th><th>月薪范围（元）</th><th>年薪月数</th><th>城市 / 区域</th><th>经验</th><th>学历</th><th>技能</th></tr></thead><tbody id="job-rows"></tbody></table></div></section>
 </main>
 <script>
 const el = id => document.getElementById(id);
 const form = el('search');
 const money = n => n == null ? '—' : n.toLocaleString('zh-CN', {maximumFractionDigits: 2});
 let current, rendered, promptId, timer;
+function updateMode() {
+  const search = !form.elements.company.value.trim();
+  el('company-pages').hidden = search;
+  el('search-batches').hidden = !search;
+  el('reselect-option').hidden = search;
+  form.elements.pages.disabled = search;
+  form.elements.batches.disabled = !search;
+  form.elements.reselect.disabled = search;
+  if (search) form.elements.reselect.checked = false;
+  form.elements.keyword.required = search;
+  form.elements.keyword.placeholder = search ? '例如 前端' : '留空查看全部';
+  el('mode-hint').textContent = search
+    ? '跨公司搜索：自动滚动收集，直到结果结束或手动停止；遇到登录、验证或加载问题时停止。已收到的岗位会保留在本次结果中。'
+    : '公司查询：读取所选公司的岗位，按页数上限停止。';
+}
+form.elements.company.addEventListener('input',updateMode);
+updateMode();
 function node(tag, text) {
   const element = document.createElement(tag);
   element.textContent = text;
@@ -47,6 +70,7 @@ async function api(path, data) {
 }
 function showResult(state) {
   const {jobs, summary:s, query:q, read_at, pages} = state.result;
+  const search = state.result.mode === 'search';
   el('summary').hidden = false;
   el('metrics').replaceChildren();
   for (const [label, value] of [['最低月薪（元）',s.min],['中位月薪（元）',s.median],['最高月薪（元）',s.max],['平均年薪月数',s.avg_months]]) {
@@ -57,8 +81,17 @@ function showResult(state) {
   el('range').hidden = s.monthly_count === 0;
   el('marker').style.left = (s.max > s.min ? 100*(s.median-s.min)/(s.max-s.min) : 50) + '%';
   el('basis').textContent = s.monthly_count + ' 个完整区间参与月薪统计。年薪按 12 个月折算，中位数按各岗位区间中点计算。';
-  el('context').textContent = [q.company, q.keyword || '全部岗位', q.city || '全部城市', jobs.length + ' 个匹配', '已读 ' + pages + ' 页', state.result.filter_mode === 'local' ? '仅在已读取页面中匹配' : '', new Date(read_at).toLocaleString('zh-CN')].filter(Boolean).join(' · ');
-  const rows = document.querySelector('tbody');
+  el('context').textContent = [q.company || '跨公司搜索', q.keyword || '全部岗位', q.city || '全部城市', jobs.length + ' 个匹配', search ? state.result.company_count + ' 家公司 · 已读 ' + state.result.batches + ' 批' : '已读 ' + pages + ' 页', state.result.filter_mode === 'local' ? '仅在已读取页面中匹配' : '', new Date(read_at).toLocaleString('zh-CN')].filter(Boolean).join(' · ');
+  el('result-note').hidden = !search;
+  el('result-note').textContent = state.result.stop_message || '';
+  el('companies').hidden = !search || !jobs.length;
+  el('company-rows').replaceChildren();
+  for (const company of state.result.companies || []) {
+    const row = node('tr','');
+    for (const value of [company.company, company.count, company.monthly_count, money(company.median)]) row.append(node('td',value));
+    el('company-rows').append(row);
+  }
+  const rows = el('job-rows');
   rows.replaceChildren();
   for (const job of jobs) {
     const row = node('tr',''), title = node('td',''), link = node('a',job.title);
@@ -73,7 +106,7 @@ function showResult(state) {
   }
   el('table').hidden = !jobs.length;
   el('empty').hidden = !!jobs.length;
-  el('empty').textContent = '所读页面没有匹配岗位。可以更换关键词、城市或读取页数。';
+  el('empty').textContent = '已读取的结果没有匹配岗位。可以更换关键词、城市或扩大读取范围。';
   el('csv').href = '/jobs/' + state.id + '/csv';
   el('csv').hidden = false;
 }
@@ -85,10 +118,11 @@ async function action(kind, data) {
 }
 function display(state) {
   current = state;
-  const busy = !['idle','done','error'].includes(state.status);
+  const busy = !['idle','done','partial','error'].includes(state.status);
   el('submit').disabled = busy;
   el('cancel').hidden = !busy;
   el('status').textContent = state.message;
+  el('status').classList.toggle('is-finished',['done','partial','error'].includes(state.status));
   if (state.prompt !== promptId) {
     promptId = state.prompt;
     const prompt = el('prompt');
@@ -106,7 +140,7 @@ function display(state) {
       prompt.append(button);
     }
   }
-  if (state.status === 'done' && rendered !== state.id) {
+  if (['done','partial'].includes(state.status) && rendered !== state.id) {
     rendered = state.id;
     showResult(state);
   }
@@ -120,7 +154,8 @@ async function refresh() {
 form.onsubmit = async event => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(form));
-  data.pages = Number(data.pages);
+  data.pages = Number(data.pages || 5);
+  data.batches = Number(data.batches || 0);
   data.reselect = form.elements.reselect.checked;
   el('submit').disabled = true;
   try { display(await api('/jobs/query',data)); }

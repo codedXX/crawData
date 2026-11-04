@@ -121,6 +121,9 @@ class Page:
     def is_closed(self):
         return False
 
+    def bring_to_front(self):
+        pass
+
 
 class BossFlowTests(unittest.TestCase):
     def setUp(self):
@@ -202,9 +205,10 @@ class BossFlowTests(unittest.TestCase):
         state = self.store.read("quota.json")
         self.assertEqual((state["companies"], state["requests"]), (2, 4))
         self.store.write("quota.json", dict(state, request_limit=4))
-        with self.assertRaisesRegex(QueryError, "额度"):
-            self.query.run(dict(self.params, company="公司别名"), self.task)
-        self.assertEqual(self.browser.page.call_count, 2)
+        result = self.run_query([body], company="公司别名", list_url=COMPANY_LIST)
+        self.assertEqual(result["summary"]["max"], 25000)
+        self.assertEqual(self.browser.page.call_count, 3)
+        self.assertEqual(self.store.read("quota.json")["requests"], 6)
 
     def test_timeout_reports_stage_without_private_request_values(self):
         page = Page([], list_url=HOME + "wapi/zpgeek/brand/unknown.json?query=private-value")
@@ -256,16 +260,16 @@ class BossFlowTests(unittest.TestCase):
         self.assertFalse(self.store.read("cache.json"))
         self.assertFalse(any(self.page.handlers.values()))
 
-    def test_request_budget_blocks_action_but_accepts_last_response(self):
+    def test_legacy_exhausted_budget_allows_company_query_and_filter(self):
         body = dict(code=0, zpData=dict(jobList=[job("前端", "one")], hasMore=False))
         from guard import Guard
         state = Guard(self.store, Mock()).state()
-        self.store.write("quota.json", dict(state, request_limit=2))
-        self.assertEqual(len(self.run_query([body], list_url=COMPANY_LIST)["jobs"]), 1)
-        self.store.write("quota.json", dict(state, request_limit=1))
-        with self.assertRaisesRegex(QueryError, "额度"):
-            self.run_query([body], list_url=COMPANY_LIST, keyword="Vue")
-        self.assertFalse(self.page.typed)
+        self.store.write("quota.json", dict(state, requests=30, request_limit=30,
+                                             companies=20, company_limit=20))
+        self.assertEqual(len(self.run_query([body], list_url=COMPANY_LIST, keyword="Vue")["jobs"]), 1)
+        self.assertTrue(self.page.typed)
+        state = self.store.read("quota.json")
+        self.assertEqual((state["requests"], state["companies"]), (32, 21))
 
     def test_old_response_is_not_used_for_new_filter(self):
         page = Page([])
