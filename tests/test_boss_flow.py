@@ -140,10 +140,17 @@ class BossFlowTests(unittest.TestCase):
         self.browser.page.return_value = self.page
         return self.query.run(dict(self.params, **params), self.task)
 
+    def test_company_site_results_need_no_exact_keyword_in_title_or_skills(self):
+        skill_match = dict(job('人事行政专员', 'skill'), skills=[])
+        included = job('薪酬绩效经理', 'included')
+        result = self.run_query([dict(code=0, zpData=dict(jobList=[skill_match, included], hasMore=False))], keyword='薪酬专员')
+        self.assertEqual([row['title'] for row in result['jobs']], ['人事行政专员', '薪酬绩效经理'])
+        self.assertEqual(result['summary']['monthly_count'], 2)
+
     def test_one_page_means_first_filtered_page(self):
         body = dict(code=0, zpData=dict(jobList=[job("前端工程师", "one"), job("H5游戏运营", "bad")], hasMore=True))
         result = self.run_query([body])
-        self.assertEqual([j["title"] for j in result["jobs"]], ["前端工程师"])
+        self.assertEqual([j["title"] for j in result["jobs"]], ["前端工程师", "H5游戏运营"])
         self.assertEqual(result["pages"], 1)
         self.assertEqual(result["summary"]["max"], 25000)
         self.assertEqual(result["filter_mode"], "site")
@@ -151,6 +158,17 @@ class BossFlowTests(unittest.TestCase):
         self.assertEqual(self.store.read("quota.json")["companies"], 1)
         self.assertEqual(self.store.read("quota.json")["requests"], 2)
         self.assertFalse(any(self.page.handlers.values()))
+
+    def test_company_metadata_saved_from_existing_document_without_extra_requests(self):
+        original = Response.text
+        def with_company_info(response):
+            return original(response) + '<section><h2>工商信息</h2><p>注册资本：100万元</p><p>成立日期：2020-01-02</p></section>'
+        body = dict(code=0, zpData=dict(jobList=[job('前端工程师', 'one')], hasMore=False))
+        with patch.object(Response, 'text', with_company_info):
+            result = self.run_query([body])
+        self.assertEqual(result['jobs'][0]['registered_capital'], '100万元')
+        self.assertEqual(result['jobs'][0]['established_date'], '2020-01-02')
+        self.assertEqual(self.store.read('quota.json')['requests'], 2)
 
     def test_live_input_response_needs_no_duplicate_submit(self):
         body = dict(code=0, zpData=dict(jobList=[job("前端工程师", "one")], hasMore=False))
@@ -289,7 +307,8 @@ class BossFlowTests(unittest.TestCase):
         with self.assertRaisesRegex(QueryError, "连续 3 次"):
             self.query.run(self.params, self.task)
         self.assertEqual(self.task.ask.call_count, 3)
-        self.assertFalse(self.store.read("quota.json"))
+        self.assertEqual(self.store.read("quota.json")["companies"], 0)
+        self.assertGreater(self.store.read("quota.json")["last_end"], 0)
 
     def test_prompt_finishes_when_login_detected(self):
         checks = iter([False, True])

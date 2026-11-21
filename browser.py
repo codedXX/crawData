@@ -1,5 +1,6 @@
 """在查询工作线程里按需启动、复用并关闭 Chrome。"""
 from pathlib import Path
+import re
 
 from guard import QueryError
 
@@ -9,6 +10,22 @@ ROOT = Path(__file__).resolve().parent
 def is_target_closed_error(error):
     # 驱动在本地断连和远端关闭时分别使用异常类名和公开的 name 属性。
     return type(error).__name__ == "TargetClosedError" or getattr(error, "name", None) == "TargetClosedError"
+
+
+def browser_error_details(error):
+    """仅提取固定分类和 Chromium 错误码，不保留日志中的 URL、参数或凭据。"""
+    message = str(error)
+    code = re.search(r"\bnet::(ERR_[A-Z_]+)\b", message)
+    code = code[1] if code else None
+    if code == 'ERR_ABORTED' or 'interrupted by another navigation' in message.lower():
+        reason = 'navigation_interrupted'
+    elif 'execution context was destroyed' in message.lower():
+        reason = 'navigation_context_changed'
+    elif 'no resource with given identifier' in message.lower():
+        reason = 'response_unavailable'
+    else:
+        reason = 'browser_transport'
+    return dict(reason=reason, network_code=code)
 
 
 class Browser:
@@ -50,7 +67,8 @@ class Browser:
         try:
             self.driver = sync_playwright().start()
             self.context = self.driver.chromium.launch_persistent_context(
-                str(self.profile), channel="chrome", headless=False, no_viewport=True, handle_sigint=False
+                str(self.profile), channel="chrome", headless=False, no_viewport=True,
+                handle_sigint=False, chromium_sandbox=True
             )
             self._context_closed = False
             self.context.on("close", self._on_context_closed)

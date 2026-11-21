@@ -46,6 +46,7 @@ class BrowserTests(unittest.TestCase):
         self.assertIs(self.client.page(), tab)
         self.assertIs(self.client.page(), tab)
         self.playwright.return_value.start.assert_called_once()
+        self.assertTrue(driver.chromium.launch_persistent_context.call_args.kwargs['chromium_sandbox'])
         self.assertEqual(tab.title.call_count, 2)
         context.close.assert_not_called()
 

@@ -1,7 +1,9 @@
 """在 Windows x64 上测试、打包并离线验收，成功后生成可分发 ZIP。"""
+import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -10,6 +12,11 @@ from pathlib import Path
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--archive-name', default='BossJobs-windows-x64', help='ZIP 文件名（不含扩展名）')
+    archive_name = parser.parse_args().archive_name
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', archive_name):
+        parser.error('ZIP 文件名只能包含英文字母、数字、下划线和连字符。')
     if sys.platform != "win32" or platform.machine().lower() not in ("amd64", "x86_64") or sys.maxsize < 2**32:
         raise SystemExit("请在 Windows x64 上使用 64 位 Python 3.12 构建。")
     root = Path(__file__).resolve().parents[1]
@@ -37,7 +44,7 @@ def main():
     shutil.copy2(root / "WINDOWS.md", package / "使用说明.md")
     shutil.copy2(root / "scripts" / "uninstall.cmd", package / "卸载.cmd")
     shutil.copy2(uninstall, package / "卸载.ps1")
-    archive = shutil.make_archive(str(root / "dist" / "BossJobs-windows-x64"), "zip",
+    archive = shutil.make_archive(str(root / "dist" / archive_name), "zip",
                                   root / "dist", "BossJobs")
     print(f"已生成并通过离线验收：{archive}")
 

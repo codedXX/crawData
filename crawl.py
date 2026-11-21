@@ -14,6 +14,7 @@ from guard import QueryError
 from app_lock import AlreadyRunning, instance_lock
 from service import Busy, Service
 from store import DATA, ROOT, csv_bytes
+from ui import page_html
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -44,7 +45,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error(403)
         path = urlsplit(self.path).path
         if path == "/":
-            return self.send_body(200, "text/html; charset=utf-8", (ROOT / "index.html").read_bytes())
+            return self.send_body(200, "text/html; charset=utf-8", page_html().encode("utf-8"))
+        if path == "/access":
+            return self.send_json(200, self.server.service.access_status())
+        if path == "/accounts":
+            return self.send_json(200, self.server.service.account_status())
         parts = path.strip("/").split("/")
         if parts[0] == "jobs" and len(parts) <= 3:
             task = self.server.service.get(parts[1] if len(parts) > 1 else None)
@@ -52,7 +57,8 @@ class Handler(BaseHTTPRequestHandler):
                 state = task.snapshot() if task else dict(status="idle", message="等待查询")
                 if len(parts) < 3:
                     return self.send_json(200, state)
-                if parts[2] == "csv" and state["status"] in ("done", "partial"):
+                if (parts[2] == "csv" and state["status"] in ("done", "partial")
+                        and state.get("export", {}).get("status") != "running"):
                     return self.send_body(200, "text/csv; charset=utf-8",
                                           csv_bytes(state["result"]["jobs"]), "boss-jobs.csv")
         self.send_json(404, {"error": "查询不存在或结果尚未就绪。"})
@@ -70,11 +76,21 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(data, dict):
                 raise ValueError("参数格式无效。")
             parts = self.path.strip("/").split("/")
+            if parts == ['login']:
+                return self.send_json(202, self.server.service.open_login(data))
+            if parts == ['login', 'cancel']:
+                return self.send_json(200, self.server.service.account_reply('cancel', data))
+            if parts == ['accounts', 'login']:
+                return self.send_json(410, {'error': '旧账号配置面板已移除，请刷新项目页面。'})
+            if len(parts) == 2 and parts[0] == 'accounts' and parts[1] in ('reply', 'cancel'):
+                return self.send_json(200, self.server.service.account_reply(parts[1], data))
             if parts == ["jobs", "query"]:
                 task = self.server.service.submit(data)
                 return self.send_json(202, task.snapshot())
             if len(parts) == 3 and parts[0] == "jobs":
                 task = self.server.service.get(parts[1])
+                if task and parts[2] == "export":
+                    return self.send_json(202, self.server.service.prepare_export(parts[1]).snapshot())
                 if task and parts[2] in ("reply", "cancel"):
                     if parts[2] == "reply":
                         task.reply(data.get("prompt"), data.get("answer"))
@@ -148,6 +164,9 @@ def print_result(result, ident, directory=DATA):
     print(f"匹配 {len(jobs)} 个岗位，月薪样本 {summary['monthly_count']} 个")
     if result.get("mode") == "search":
         print(f"已读 {result['batches']} 批，匹配 {result['company_count']} 家公司")
+        if result.get("province_search"):
+            print(f"已查询 {result.get('cities_visited', result['cities_done'])}/{result['cities_total']} 个城市")
+            print(f"已读完 {result['cities_done']}/{result['cities_total']} 个城市")
         print(result["stop_message"])
         for company in result["companies"]:
             print(f"{company['company']}：{company['count']} 个岗位，中位月薪 {fmt(company['median'])} 元")
@@ -156,11 +175,11 @@ def print_result(result, ident, directory=DATA):
     for label, field in (("最低月薪（元）", "min"), ("最高月薪（元）", "max"),
                          ("岗位中值的中位数（元）", "median"), ("平均年薪月数", "avg_months")):
         print(label, fmt(summary[field]))
-    from store import COLUMNS
+    from store import COLUMNS, export_value
     print("\t".join(COLUMNS.values()))
     for job in jobs:
         values = ["、".join(v) if isinstance(v, list) else str(v) if v is not None else "—"
-                  for v in (job[field] for field in COLUMNS)]
+                  for v in (export_value(job, field) for field in COLUMNS)]
         print("\t".join(values))
     path = directory / f"boss-{ident}.csv"
     path.write_bytes(csv_bytes(jobs))
@@ -169,7 +188,9 @@ def print_result(result, ident, directory=DATA):
 
 def query(url, args):
     params = {k: getattr(args, k) for k in ("company", "keyword", "city", "pages", "batches")}
+    params["per_city_batches"] = getattr(args, "per_city_batches", 0)
     params["reselect"] = args.reselect
+    params['company_details'] = getattr(args, 'company_details', False)
     state = request(url + "/jobs/query", params)
     path = url + "/jobs/" + state["id"]
     last = None
@@ -218,10 +239,13 @@ def main():
     search.add_argument("--company", default="", help="公司名称或 BOSS 公司链接；省略时跨公司搜索")
     search.add_argument("--dev", action="store_true", help="使用独立的开发数据和浏览器配置")
     search.add_argument("--reselect", action="store_true", help="重新选择公司并更新名称映射")
+    search.add_argument('--company-details', action='store_true', help='查询时每家公司读取一次岗位详情页的工商信息，导出不再访问网站')
     search.add_argument("--keyword", default="前端")
-    search.add_argument("--city", default="")
-    search.add_argument("--pages", default=5, type=int, choices=(1, 2, 3, 4, 5), help="公司查询读取页数")
-    search.add_argument("--batches", default=0, type=int, help="跨公司搜索批数，0 自动加载到结束（默认，无每日次数上限）；可选 1–60")
+    search.add_argument("--city", default="", help="省份或城市，例如广东省、深圳市；留空搜索全国")
+    search.add_argument("--pages", default=1, type=int, choices=(1, 2, 3, 4, 5), help="公司查询读取页数，默认 1 页")
+    search.add_argument("--batches", default=0, type=int, help="跨公司搜索总批数，默认 0 无上限（不建议），可选 1–60")
+    search.add_argument("--city-batches", dest="per_city_batches", default=0, type=int,
+                        help="省份查询每市最多读取批数，默认 0 不限（不建议）")
     scrape = commands.add_parser("collect", help="读取 HTML 中的 JobPosting 并输出 JSON")
     scrape.add_argument("source")
     scrape.add_argument("--company", default="")

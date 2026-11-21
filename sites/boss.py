@@ -5,8 +5,9 @@ import time
 from datetime import datetime
 from urllib.parse import urlencode, urlsplit
 
-from guard import Guard, LoginRequired, QueryError, RiskBlocked, challenged, check_page, login_link, signed_in
+from guard import Guard, LoginRequired, QueryError, RiskBlocked, AccessRestricted, challenged, check_page, check_restriction, restriction_from_text, login_link, signed_in, retry_after_until
 from salary import parse_salary, summarize
+from sites.boss_locations import location_matches
 from store import ROOT, key, write_json
 
 HOME = "https://www.zhipin.com/"
@@ -19,6 +20,8 @@ BRAND_PATH = re.compile(rf"/gongsi/(?:job/)?({ID.pattern})\.html/?")
 # 公司页箭头本身是无尺寸的 <i>，要定位其可点击的父级 <a>。
 NEXT = '.options-pages a:has(.arrow-right), .ui-icon-arrow-right, .options-pages a.next, .pagination .next, button[aria-label="下一页"], a[aria-label="下一页"]'
 COMPANY_DOC = re.compile(r"^https://www\.zhipin\.com/gongsi/job/[A-Za-z0-9_~-]+\.html(?:[?#]|$)")
+COMPANY_INFO_DOC = re.compile(r"^https://www\.zhipin\.com/gongsi/[A-Za-z0-9_~-]+\.html(?:[?#]|$)")
+JOB_DETAIL_DOC = re.compile(r"^https://www\.zhipin\.com/job_detail/[A-Za-z0-9_~-]+\.html(?:[?#]|$)")
 FILTER = 'input[placeholder="查找职位中包含的关键词"], .position-search input[placeholder*="职位"], .job-filter input[placeholder*="职位"]'
 FIELDS = ("jobName", "salaryDesc", "brandName", "encryptBrandId", "encryptJobId",
           "cityName", "areaDistrict", "jobExperience", "jobDegree", "skills")
@@ -26,7 +29,7 @@ SAMPLE = ROOT / "examples" / "boss_joblist.json"
 FRONTEND_TECH = re.compile(r"(?<![a-z0-9])(?:web|h5|react|vue)(?![a-z0-9])|小程序", re.I)
 FRONTEND_EXCLUDE = re.compile(r"后端|后台|运营|研究员|全栈|web\s*3|back[ -]?end|full[ -]?stack", re.I)
 DEVELOPER = re.compile(r"开发|工程师|developer|engineer", re.I)
-RISK_MESSAGE = re.compile(r"访问(?:行为)?异常|行为异常|访问过于频繁|请求过于频繁|安全验证|人机验证|滑块验证|验证码|操作过于频繁", re.I)
+RISK_MESSAGE = re.compile(r"访问(?:行为)?异常|行为异常|异常行为|限制访问|访问受限|访问过于频繁|请求过于频繁|安全验证|人机验证|滑块验证|验证码|操作过于频繁", re.I)
 
 
 class SchemaError(QueryError):
@@ -50,6 +53,8 @@ def unpack(body):
     if body["code"] != 0:
         if re.search(r"未登录|请.*登录|登录.*失效", str(body.get("message", ""))):
             raise LoginRequired("登录已失效，请在 Chrome 窗口里手动登录。")
+        if re.search(r"访问受限|限制访问", str(body.get("message", ""))):
+            raise restriction_from_text(str(body["message"])) or AccessRestricted()
         if RISK_MESSAGE.search(str(body.get("message", ""))):
             raise RiskBlocked(body["code"] if isinstance(body["code"], int) else "api-error")
         raise QueryError(f"列表接口返回错误（code={body['code']}），查询已停止。")
@@ -91,7 +96,10 @@ def map_job(item, brand):
     skills = item.get("skills") or []
     if not isinstance(skills, list) or not all(isinstance(s, str) for s in skills):
         raise SchemaError("skills 格式不符")
-    return dict(title=title, company=company, salary_raw=salary["raw"], salary_min=salary["min"],
+    brand_id = field("encryptBrandId", brand.get("id", ""))
+    if brand_id and not ID.fullmatch(brand_id):
+        raise SchemaError("公司 ID 格式不符")
+    return dict(title=title, company=company, company_id=brand_id, salary_raw=salary["raw"], salary_min=salary["min"],
                 salary_max=salary["max"], months=salary["months"], salary_type=salary["type"],
                 skills=skills, city=field("cityName"), area=field("areaDistrict"),
                 experience=field("jobExperience"), degree=field("jobDegree"),
@@ -123,7 +131,7 @@ def matches(job, keyword, city):
         )
     else:
         by_role = key(keyword) in key(text)
-    return bool(by_role) and (not city or key(job["city"]).removesuffix("市") == key(city).removesuffix("市"))
+    return bool(by_role) and location_matches(job["city"], city)
 
 
 class BossSession:
@@ -135,16 +143,41 @@ class BossSession:
         self.guard = Guard(store, task.report, task.sleep)
         self.access_error = None
         self.list_requests = 0
+        self.company_info = {}
 
     def meter(self, request):
         if not (JOBLIST.search(request.url) or
-                (COMPANY_DOC.search(request.url) and request.resource_type == "document")):
+                ((COMPANY_DOC.search(request.url) or COMPANY_INFO_DOC.search(request.url) or JOB_DETAIL_DOC.search(request.url))
+                 and request.resource_type == "document")):
             return
         self.list_requests += 1
         try:
             self.guard.list_request()
         except (QueryError, OSError, ValueError) as exc:
+            if not isinstance(self.access_error, RiskBlocked):
+                self.access_error = exc
+
+    def observe_risk(self, response, body_ready=False):
+        """仅由本次相关响应调用：风控先于结果排序、失败请求和超时处理。"""
+        if isinstance(self.access_error, RiskBlocked):
+            return
+        try:
+            if response.status == 429:
+                self.check_status(response)
+            elif body_ready and response.status == 200 and JOBLIST.search(response.url):
+                # 读取浏览器已收到的响应，不发起额外请求；正常数据仍按原顺序处理。
+                # 只在 requestfinished 后读正文，避免半截响应再次阻塞风控检查。
+                from patchright.sync_api import Error as BrowserError
+                try:
+                    body = response.json()
+                except (ValueError, UnicodeError, BrowserError):
+                    return
+                unpack(body)
+        except RiskBlocked as exc:
             self.access_error = exc
+        except QueryError:
+            # 登录、结构和普通业务错误沿用原处理路径，不能误判为风控。
+            pass
 
     def before_action(self):
         if self.access_error:
@@ -152,9 +185,19 @@ class BossSession:
         self.guard.check()
         self.task.sleep(0)
         check_page(self.page)
+        if self.access_error:
+            raise self.access_error
 
     def ask(self, kind, message, choices=None):
-        return self.task.ask(kind, message, choices, pump=lambda: self.page.wait_for_timeout(80))
+        return self.task.ask(kind, message, choices, pump=lambda: self.page.wait_for_timeout(80),
+                             done=self.login_complete if kind == "login" else None)
+
+    def login_complete(self):
+        # 登录等待也会发生风控跳转，必须先识别限制，再判断头像。
+        check_restriction(self.page)
+        if challenged(self.page):
+            raise RiskBlocked("verification")
+        return signed_in(self.page)
 
     def verify(self):
         for _ in range(3):
@@ -166,16 +209,25 @@ class BossSession:
 
     def goto(self, url):
         self.before_action()
-        self.page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        response = self.page.goto(url, wait_until="domcontentloaded", timeout=20000)
         check_page(self.page)
+        if self.access_error:
+            raise self.access_error
+        if response is not None:
+            self.check_status(response)
 
     def login(self):
         page = self.page
         self.guard.action = "登录"
+        check_restriction(page)
         if not page.url.startswith(HOME):
             # 新标签页无法反映上次验证的结果；先打开首页再判断。
             self.guard.check()
-            page.goto(HOME, wait_until="domcontentloaded", timeout=20000)
+            response = page.goto(HOME, wait_until="domcontentloaded", timeout=20000)
+            check_restriction(page)
+            if response is not None:
+                self.check_status(response)
+        check_restriction(page)
         if self.guard.state()["needs_verify"]:
             if challenged(page):
                 self.verify()
@@ -184,19 +236,19 @@ class BossSession:
         if challenged(page):
             raise RiskBlocked("verification")
         for attempt in range(3):
-            if signed_in(page):
+            if self.login_complete():
                 return
             if attempt == 0:
                 self.open_login()
-            self.task.ask("login", "已在 Chrome 打开登录页，请用 BOSS App 扫码。登录完成后会自动继续，也可点击“我已登录”。",
-                          pump=lambda: page.wait_for_timeout(80), done=lambda: signed_in(page))
+            self.task.ask("login", "请在 BOSS 官方 Chrome 窗口使用手机号／验证码或扫码登录。登录完成后会自动继续，也可点击“我已登录”。",
+                          pump=lambda: page.wait_for_timeout(80), done=self.login_complete)
             if challenged(page):
                 raise RiskBlocked("verification")
-        if not signed_in(page):
+        if not self.login_complete():
             raise QueryError("连续 3 次未能确认登录。若 Chrome 已显示头像，可能是页面结构变化，请检查登录选择器后再查询。")
 
     def open_login(self):
-        """只点开登录入口，扫码由用户完成；找不到入口时保持当前页面。"""
+        """只点开官方登录入口，认证由用户完成；找不到入口时保持当前页面。"""
         link = login_link(self.page).first
         try:
             self.page.bring_to_front()
@@ -219,6 +271,7 @@ class BossSession:
         self.guard.action = label
         self.task.report(label)
         responses = []
+        risk_responses = {}
         initiated = set()
         observed = {}
 
@@ -236,14 +289,23 @@ class BossSession:
             if response.request in observed:
                 observed[response.request]["status"] = response.status
             if JOBLIST.search(response.url):
+                self.observe_risk(response)
+                risk_responses[response.request] = response
                 responses.append(response)
             elif (source and response.request.resource_type == "document"
                   and response.url.split("?")[0] == source and response.status >= 200
                   and not 300 <= response.status < 400):
+                self.observe_risk(response)
                 responses.append(response)
+
+        def observe_finished(request):
+            response = risk_responses.pop(request, None)
+            if response is not None:
+                self.observe_risk(response, body_ready=True)
 
         self.page.on("request", observe_request)
         self.page.on("response", observe)
+        self.page.on("requestfinished", observe_finished)
         deadline = time.monotonic() + 15
         try:
             self.before_action()
@@ -252,9 +314,13 @@ class BossSession:
                 if self.access_error:
                     raise self.access_error
                 check_page(self.page)
+                if self.access_error:
+                    raise self.access_error
                 if self.page.locator(".header-login-btn:visible").count():
                     raise LoginRequired("请在 Chrome 窗口里登录。")
                 while responses:
+                    if self.access_error:
+                        raise self.access_error
                     response = responses.pop(0)
                     self.check_status(response)
                     if JOBLIST.search(response.url):
@@ -262,11 +328,18 @@ class BossSession:
                             data = unpack(response.json())
                         except (ValueError, UnicodeError) as exc:
                             raise SchemaError("响应并非 JSON") from exc
+                        if self.access_error:
+                            raise self.access_error
                         sample = ("boss_company_querylist.json" if urlsplit(response.url).path == "/wapi/zpgeek/brand/job/querylist.json"
                                   else "boss_joblist.json")
                         save_sample(data, self.store.samples / sample)
                         return data
-                    data = company_list(response.text())
+                    html = response.text()
+                    if self.access_error:
+                        raise self.access_error
+                    from sites.boss_company import parse_company_info
+                    self.company_info.update({key: value for key, value in parse_company_info(html).items() if value})
+                    data = company_list(html)
                     if data is not None:
                         data = unpack({"code": 0, "zpData": data})
                         save_sample(data, self.store.samples / "boss_company_first_page.json")
@@ -277,16 +350,24 @@ class BossSession:
                 self.task.sleep(0)
                 self.page.wait_for_timeout(200)
         except BrowserTimeout as exc:
+            if self.access_error:
+                raise self.access_error
             check_page(self.page)
             raise SchemaError("页面操作超时") from exc
         finally:
+            self.page.remove_listener("requestfinished", observe_finished)
             self.page.remove_listener("response", observe)
             self.page.remove_listener("request", observe_request)
 
     @staticmethod
     def check_status(response):
         if response.status == 429:
-            raise RiskBlocked(response.status)
+            try:
+                retry_after = response.headers.get("retry-after")
+            except Exception:
+                # 响应头读取失败也必须保留 429 的停止语义。
+                retry_after = None
+            raise RiskBlocked(response.status, retry_after_until(retry_after))
         if response.status == 401:
             raise LoginRequired("登录已失效。")
         if not response.ok:
@@ -303,7 +384,7 @@ class BossSession:
         return brand
 
     def pause_page(self):
-        self.guard.wait(self.guard.interval(4, 9))
+        self.guard.wait(self.guard.interval(15, 30))
 
     def next_action(self, data):
         button = self.page.locator(NEXT).last
@@ -374,7 +455,11 @@ class BossSession:
                 if item.get("encryptBrandId") and item["encryptBrandId"] != brand["id"]:
                     continue
                 job = map_job(item, brand)
-                if matches(job, keyword, params["city"]):
+                job.update(self.company_info)
+                # 已在站点提交关键词时，以站点搜索结果为准；只核对地区。
+                if any((location_matches(job["city"], location) if filter_mode == "site"
+                        else matches(job, keyword, location))
+                       for location in (params.get("selected_cities") or [params["city"]])):
                     jobs[job["url"]] = job
             if used >= pages or data.get("hasMore") is False:
                 break
@@ -409,11 +494,12 @@ class BossQuery:
         brand = dict(id=ident, name="") if ident else None
         if company and not ident and not params.get("reselect"):
             brand = self.store.company(company)
-        Guard(self.store, task.report).check()
+        preflight = Guard(self.store, task.report, task.sleep)
+        preflight.start_company()
         session_type = SearchSession if search else BossSession
         session = session_type(self.browser.page(), self.store, task)
         page, guard = session.page, session.guard
-        started = False
+        started = True
         success = False
 
         def interrupted(message):
@@ -424,8 +510,6 @@ class BossQuery:
         page.on("request", session.meter)
         try:
             session.login()
-            guard.start_company()
-            started = True
             if search:
                 result = session.read_search(params)
                 success = result["complete"]
@@ -437,27 +521,22 @@ class BossQuery:
             success = True
             return result
         except RiskBlocked as exc:
-            guard.record_risk(exc.code)
-            if search:
-                return interrupted("触发安全验证，已停止加载；请在 Chrome 中人工处理，下次查询会要求确认。")
-            session.verify()
-            raise QueryError("已确认验证，原查询已停止。如需重新查询，请再次提交。") from exc
+            guard.record_risk(exc.code, exc.until)
+            return interrupted(guard.access_status()["message"])
         except LoginRequired as exc:
-            if search:
-                try:
-                    opened = session.open_login()
-                    prompt = ("已点击登录按钮，请扫码登录" if opened else "未找到可点击的登录入口，请在项目 Chrome 中手动登录")
-                    session.ask("login", f"登录已失效，{prompt}，然后点击“我已登录”。")
-                    message = ("已确认登录，请重新提交查询。" if signed_in(page) else
-                               "尚未检测到登录状态，请在项目 Chrome 中完成登录后重新查询。")
-                except QueryError as login_error:
-                    message = str(login_error)
-                return interrupted(message)
-            session.open_login()
-            session.ask("login", f"{exc} 完成后点击“我已登录”。")
-            if not signed_in(page):
-                raise QueryError("尚未检测到登录头像。请在 Chrome 完成登录后重新查询。") from exc
-            raise QueryError("已确认登录，请重新提交查询。") from exc
+            try:
+                opened = session.open_login()
+                prompt = ("已点击登录按钮，请使用手机号／验证码或扫码登录" if opened else "未找到可点击的登录入口，请在项目 Chrome 中手动登录")
+                session.ask("login", f"登录已失效，{prompt}，完成后自动确认，也可点击“我已登录”。")
+                message = ("已确认登录，请重新提交查询。" if session.login_complete() else
+                           "尚未检测到登录状态，请在项目 Chrome 中完成登录后重新查询。")
+            except RiskBlocked as login_error:
+                # except LoginRequired 内的新异常不会进入上面的风控处理分支。
+                guard.record_risk(login_error.code, login_error.until)
+                message = guard.access_status()["message"]
+            except QueryError as login_error:
+                message = str(login_error)
+            return interrupted(message)
         except (QueryError, OSError, ValueError) as exc:
             if search and session.batches:
                 return interrupted(str(exc))

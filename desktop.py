@@ -10,6 +10,7 @@ from app_lock import AlreadyRunning, instance_lock
 from guard import QueryError
 from service import Service
 from store import ROOT, csv_bytes, write_json
+from ui import page_html
 
 
 def app_directory(dev=False):
@@ -24,7 +25,7 @@ def app_directory(dev=False):
 
 
 def desktop_html():
-    return (ROOT / "index.html").read_text(encoding="utf-8").replace(
+    return page_html().replace(
         "<head>", "<head><script>window.BOSS_DESKTOP = true;</script>", 1)
 
 
@@ -44,6 +45,18 @@ class DesktopAPI:
             return {"error": str(exc)}
 
     def _dispatch(self, path, data):
+        if path == "/access" and data is None:
+            return self._service.access_status()
+        if path == '/login' and data is not None:
+            return self._service.open_login(data)
+        if path == '/login/cancel' and data is not None:
+            return self._service.account_reply('cancel', data)
+        if path == '/accounts' and data is None:
+            return self._service.account_status()
+        if path == '/accounts/login' and data is not None:
+            raise ValueError('旧账号配置面板已移除，请重新打开项目页面。')
+        if path in ('/accounts/reply', '/accounts/cancel') and data is not None:
+            return self._service.account_reply(path.rsplit('/', 1)[-1], data)
         if path == "/jobs/query" and data is not None:
             return self._service.submit(data).snapshot()
         if path == "/jobs" and data is None:
@@ -56,6 +69,8 @@ class DesktopAPI:
                 if len(parts) == 2 and data is None:
                     return task.snapshot()
                 if len(parts) == 3 and data is not None:
+                    if parts[2] == "export":
+                        return self._service.prepare_export(parts[1]).snapshot()
                     if parts[2] == "reply":
                         task.reply(data.get("prompt"), data.get("answer"))
                         return task.snapshot()
@@ -74,6 +89,8 @@ class DesktopAPI:
             state = task.snapshot() if task else {}
             if state.get("status") not in ("done", "partial"):
                 raise ValueError("查询结果尚未就绪。")
+            if state.get("export", {}).get("status") == "running":
+                raise ValueError("正在补充公司工商信息，请完成或停止补充后保存。")
             # 仅保存服务中已完成的结果，不接受网页传入的文件内容或磁盘路径。
             content = csv_bytes(state["result"]["jobs"])
             import webview
@@ -101,14 +118,39 @@ def smoke_check(window, report):
         window.evaluate_js("""(async () => {
             const state = await api('/jobs');
             return {title: document.title, status: state.status,
-                    desktop: window.BOSS_DESKTOP, form: !!document.getElementById('search')};
+                    desktop: window.BOSS_DESKTOP, form: !!document.getElementById('search'),
+                    per_city_batches: Number(document.querySelector('select[name="per_city_batches"]')?.value),
+                    keyword: document.querySelector('input[name="keyword"]').value,
+                    selected_city: document.querySelector('input[name="city"]').value,
+                    location_label: document.getElementById('location-value').textContent};
         })()""", callback=received)
         if not ready.wait(20) or result.get("status") != "idle" or not result.get("form"):
             raise RuntimeError("桌面窗口或 JS 桥未就绪")
-        from sites.boss_search import city_code
+        if result.get("per_city_batches") != 0:
+            raise RuntimeError("省内每市批数配置未就绪")
+        if (result.get('keyword') != '' or result.get('selected_city') != '广东省'
+                or result.get('location_label') != '广东省 / 全省'):
+            raise RuntimeError('关键词或默认地区配置未就绪')
+        from sites.boss_search import city_code, search_targets
         from sites.boss_ssr import company_list
+        from sites.boss_company import parse_company_info
+        from company_export import CompanyExporter
+        from industry import estimate_industry
         from patchright.sync_api import sync_playwright
         result["city"] = city_code("深圳")
+        result["province"] = city_code("广东省")
+        province_targets = search_targets("广东省")
+        result["province_cities"] = len(province_targets)
+        if (not province_targets or province_targets[0] != ("广州", "101280100")
+                or any(code.endswith("0000") for _, code in province_targets)):
+            raise RuntimeError("省份查询未正确展开为城市")
+        result["csv_columns"] = csv_bytes([]).decode("utf-8-sig").splitlines()[0].split(",")[:3]
+        result["company_parser"] = parse_company_info(
+            '<section><h2>工商信息</h2><p>注册资本：1000万人民币</p><p>成立日期：2021-08-30</p></section>')
+        result["industry"] = estimate_industry(dict(title="前端开发", skills=[]))
+        if (result["csv_columns"] != ["注册资金", "所属行业", "成立日期"]
+                or result["company_parser"] != {"registered_capital": "1000万人民币", "established_date": "2021-08-30"}):
+            raise RuntimeError("CSV 表头或工商信息解析资源未就绪")
         # 确认冻结程序包含惰性加载的 esprima 和 Patchright 的 Node 驱动。
         company_list('<script>window.__BOSSCOMPANY__=(function(){return {data:[{brandJobInfo:{jobList:[],hasMore:false}}]};}());</script>')
         with sync_playwright() as driver:
@@ -138,7 +180,7 @@ def run_app(directory, smoke_report=None):
             webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
             window = webview.create_window(
                 "岗位查询 · BOSS 直聘", html=desktop_html(), js_api=api,
-                width=1180, height=820, min_size=(760, 560), background_color="#fbfdfd")
+                width=1180, height=820, min_size=(760, 560), background_color="#f5eee4")
             api._window = window
             if smoke_report:
                 window.events.loaded += lambda: smoke_check(window, smoke_report)

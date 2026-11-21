@@ -3,12 +3,21 @@ import csv
 import io
 import json
 import os
+import sys
 import tempfile
+import threading
+import time
 import unicodedata
 from pathlib import Path
 
+from industry import estimate_industry
+
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
+# 界面轮询和采集线程会访问同一文件；Windows 的普通读取句柄不共享删除权限。
+# 所有 Store 实例和 write_json 调用共用锁，避免读取期间执行原子替换。
+_JSON_LOCK = threading.RLock()
+_REPLACE_DELAYS = (.05, .1, .2, .4, .8, .8)
 
 
 def key(value):
@@ -16,6 +25,29 @@ def key(value):
 
 
 def write_json(path, value):
+    with _JSON_LOCK:
+        _write_json(Path(path), value)
+
+
+def _replace_json(source, target):
+    # 只重试本地替换；不重新序列化、不重发网站请求。外部扫描程序的短暂占用
+    # 不受进程内锁控制，持续权限错误仍须停止，不能退回非原子的覆盖写入。
+    for delay in (*_REPLACE_DELAYS, None):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError as exc:
+            if sys.platform != 'win32' or getattr(exc, 'winerror', None) not in {5, 32, 33}:
+                raise
+            if delay is None:
+                raise PermissionError(
+                    f'无法保存本地状态（{target.name}）：文件持续被占用或没有写入权限。'
+                    '原有记录未被覆盖，请关闭占用该文件的软件并检查数据目录写入权限后重试。'
+                ) from exc
+            time.sleep(delay)
+
+
+def _write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     name = None
     try:
@@ -25,10 +57,14 @@ def write_json(path, value):
             f.flush()
             os.fsync(f.fileno())
         # Windows 不允许替换仍被打开的临时文件。
-        os.replace(name, path)
+        _replace_json(name, path)
     finally:
         if name is not None:
-            Path(name).unlink(missing_ok=True)
+            try:
+                Path(name).unlink(missing_ok=True)
+            except OSError:
+                # 外部占用也可能阻止清理，不能掩盖真正的保存异常。
+                pass
 
 
 class Store:
@@ -38,7 +74,9 @@ class Store:
 
     def read(self, name):
         try:
-            data = json.loads((self.directory / name).read_text(encoding="utf-8"))
+            with _JSON_LOCK:
+                text = (self.directory / name).read_text(encoding="utf-8")
+            data = json.loads(text)
             if not isinstance(data, dict):
                 raise ValueError("应为 JSON 对象")
             return data
@@ -60,11 +98,20 @@ class Store:
 
 
 COLUMNS = {
+    "registered_capital": "注册资金", "industry": "所属行业", "established_date": "成立日期",
     "company": "公司", "title": "岗位", "salary_raw": "薪资原文", "salary_min": "最低月薪（元）",
     "salary_max": "最高月薪（元）", "months": "年薪月数", "salary_type": "薪资类型",
     "city": "城市", "area": "区域", "experience": "经验", "degree": "学历",
     "skills": "技能", "url": "岗位链接",
 }
+
+
+def export_value(job, field):
+    if field == "industry":
+        return job.get(field) or estimate_industry(job)
+    if field in {"registered_capital", "established_date"}:
+        return job.get(field, "")
+    return job[field]
 
 
 def csv_bytes(jobs):
@@ -74,7 +121,7 @@ def csv_bytes(jobs):
     for job in jobs:
         row = []
         for field in COLUMNS:
-            value = job[field]
+            value = export_value(job, field)
             if isinstance(value, list):
                 value = "、".join(value)
             if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")):

@@ -65,7 +65,17 @@ class SearchTests(unittest.TestCase):
         self.page = page or SearchPage(pages)
         self.browser.page.return_value = self.page
         with patch('sites.boss_search.time.monotonic', side_effect=lambda: self.page.clock):
-            return self.query.run(validate(dict(keyword="前端", city="深圳", **params)), self.task)
+            return self.query.run(validate(dict(dict(keyword="前端", city="深圳", batches=0), **params)), self.task)
+
+    def test_search_keeps_site_results_without_exact_keyword_in_title_or_skills(self):
+        from store import csv_bytes
+        skill_match = dict(job('人事行政专员', 'skill'), skills=[])
+        included = job('薪酬绩效经理', 'included')
+        result = self.run_search([batch(skill_match, included, more=False)], keyword='薪酬专员')
+        self.assertEqual([row['title'] for row in result['jobs']], ['人事行政专员', '薪酬绩效经理'])
+        self.assertEqual(result['summary']['monthly_count'], 2)
+        self.assertEqual(sum(company['count'] for company in result['companies']), 2)
+        self.assertIn('人事行政专员', csv_bytes(result['jobs']).decode('utf-8-sig'))
 
     def test_auto_scroll_beyond_five_batches_with_recycled_cards(self):
         pages = [batch(dict(job("前端开发", str(i)), encryptBrandId=f"b{i % 2}",
@@ -135,16 +145,16 @@ class SearchTests(unittest.TestCase):
         self.assertIn('空批次', result['stop_message'])
 
     def test_repeated_batch_stops_without_claiming_completion(self):
-        result = self.run_search([batch(job('前端', '1')), batch(job('前端', '1'))])
+        result = self.run_search([batch(job('前端', '1'))] * 4)
         self.assertFalse(result['complete'])
         self.assertEqual(len(result['jobs']), 1)
         self.assertIn('相同岗位', result['stop_message'])
 
-    def test_filter_empty_batch_does_not_stop_loading(self):
+    def test_site_results_without_keyword_are_kept_across_batches(self):
         result = self.run_search([batch(job('后端开发', '1')), batch(job('前端开发', '2'), more=False)])
         self.assertTrue(result['complete'])
         self.assertEqual(result['scanned'], 2)
-        self.assertEqual(len(result['jobs']), 1)
+        self.assertEqual([row['title'] for row in result['jobs']], ['后端开发', '前端开发'])
 
     def test_cancel_keeps_partial_results_and_removes_listeners(self):
         self.task = Task({})

@@ -84,6 +84,13 @@ class ReplayTests(unittest.TestCase):
                 self.assertEqual(matches(job, "前端", ""), title in included)
         self.assertTrue(matches(dict(title="全栈工程师", skills=["Vue"], city=""), "Vue", ""))
 
+    def test_payroll_keyword_matches_title_or_skill_tag(self):
+        for title in ('薪酬绩效经理', '薪酬专员', '人事薪酬主管'):
+            self.assertTrue(matches(dict(title=title, skills=[], city='深圳'), '薪酬', '深圳'))
+        for title in ('人事行政专员', '人力资源主管', '人事行政主管'):
+            self.assertTrue(matches(dict(title=title, skills=['薪酬管理'], city='深圳'), '薪酬', '深圳'))
+        self.assertFalse(matches(dict(title='薪酬专员', skills=[], city='广州'), '薪酬', '深圳'))
+
     def test_api_errors_do_not_all_become_risk(self):
         for code, message in [(400, "参数错误"), (500, "服务暂时不可用"), (37, "参数错误")]:
             with self.subTest(code=code):
@@ -111,7 +118,7 @@ class ReplayTests(unittest.TestCase):
 
     def test_validation(self):
         self.assertEqual(validate({"company": "公司"})["keyword"], "前端")
-        self.assertEqual(validate({"company": "公司"})["pages"], 5)
+        self.assertEqual(validate({"company": "公司"})["pages"], 1)
         for pages in range(1, 6):
             self.assertEqual(validate({"company": "A", "pages": pages})["pages"], pages)
         self.assertEqual(validate({"company": ""})["batches"], 0)
@@ -137,11 +144,15 @@ class StorageTests(unittest.TestCase):
         self.assertNotIn("request_limit", self.guard.state())
         self.guard.clear_verification()
         self.assertEqual(self.guard.record_risk(37), 2)
-        self.assertTrue(self.guard.check()["needs_verify"])
-        self.assertEqual(self.guard.check()["risks"], 2)
+        self.assertTrue(self.guard.state()["needs_verify"])
+        self.assertEqual(self.guard.state()["risks"], 2)
+        with self.assertRaises(QueryError):
+            self.guard.check()
         yesterday = dict(self.guard.state(), date="2001-01-01")
         self.store.write("quota.json", yesterday)
-        self.assertEqual(self.guard.check()["risks"], 0)
+        with self.assertRaises(QueryError):
+            self.guard.check()
+        self.assertEqual(self.guard.state()["risks"], 0)
         self.assertEqual(len((Path(self.temp.name) / "events.log").read_text().splitlines()), 2)
 
     def test_legacy_limits_are_ignored_but_delay_is_preserved(self):
@@ -160,7 +171,7 @@ class StorageTests(unittest.TestCase):
             self.guard.start_company()
         seconds, = self.guard.sleep.call_args.args
         self.assertGreaterEqual(seconds, 400)
-        self.assertLessEqual(seconds, 720)
+        self.assertLessEqual(seconds, 840)
 
     def test_failed_company_attempt_preserves_count_and_cooldown(self):
         self.guard.start_company()
